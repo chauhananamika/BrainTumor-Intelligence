@@ -1,6 +1,6 @@
 # 🧠 NeuroScan — Brain MRI Tumor Classifier
 
-A deep learning web application that classifies 2D brain MRI slices into **Glioma**, **Meningioma**, **Pituitary tumor**, or **No tumor** using a Convolutional Neural Network (CNN), with Grad-CAM heatmap visualization.
+A web application that classifies 2D brain MRI slices into **Glioma**, **Meningioma**, **Pituitary tumor**, or **No tumor** using a Convolutional Neural Network (CNN), with Grad-CAM heatmap visualization.
 
 <p align="center">
   <img width="404" alt="NeuroScan Demo" src="https://github.com/user-attachments/assets/25e9b470-f046-46cd-a629-ea67423c419c" />
