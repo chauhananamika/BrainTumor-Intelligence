@@ -1,0 +1,46 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.env/
+
+# Model weights (too large for GitHub — download separately or use Git LFS)
+*.h5
+*.hdf5
+*.keras
+*.pb
+saved_model/
+
+# Uploaded user images (generated at runtime)
+uploads/*.jpg
+uploads/*.jpeg
+uploads/*.png
+uploads/*.bmp
+!uploads/.gitkeep
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log

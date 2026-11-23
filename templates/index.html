@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="classifier-container">
+    
+    <!-- Top Grid: Left (Upload & Samples) & Right (Prediction & Grad-CAM) -->
+    <div class="two-column-layout">
+        
+        <!-- LEFT COLUMN -->
+        <section class="card-panel left-panel">
+            <h1 class="panel-title">Brain MRI tumor classifier</h1>
+            <p class="panel-subtitle">
+                Classifies a 2D brain MRI slice as glioma, meningioma, pituitary tumor or no tumor. It refuses images it wasn't built for, and says when it isn't sure.
+            </p>
+
+            <!-- Drag & Drop Zone (Native label triggers fileInput reliably) -->
+            <label class="drop-zone" for="fileInput" id="dropZone">
+                <div class="upload-icon-wrapper">
+                    <i class="fa-solid fa-arrow-up-from-bracket"></i>
+                </div>
+                <div class="drop-zone-text">Drop an MRI slice here</div>
+                <div class="drop-zone-hint">
+                    or click anywhere here, or paste an image &bull; PNG, JPEG, BMP &bull; up to 10 MB
+                </div>
+                <div class="btn-browse-wrapper">
+                    <span class="btn-browse">
+                        <i class="fa-solid fa-folder-open"></i> Choose Image File
+                    </span>
+                </div>
+            </label>
+            <input type="file" id="fileInput" accept="image/png,image/jpeg,image/jpg,image/bmp,image/*" style="display: none;">
+
+            <!-- Test Set Samples -->
+            <div class="test-set-section">
+                <div class="test-set-heading">Try a scan from the held-out test set</div>
+                <div class="samples-grid">
+                    <button type="button" class="sample-card" data-sample="glioma">
+                        <div class="sample-thumb-wrapper">
+                            <img src="{{ url_for('static', filename='samples/glioma.jpg') }}" alt="Glioma sample">
+                        </div>
+                        <span class="sample-label">Glioma</span>
+                    </button>
+
+                    <button type="button" class="sample-card active" data-sample="meningioma">
+                        <div class="sample-thumb-wrapper">
+                            <img src="{{ url_for('static', filename='samples/meningioma.jpg') }}" alt="Meningioma sample">
+                        </div>
+                        <span class="sample-label">Meningioma</span>
+                    </button>
+
+                    <button type="button" class="sample-card" data-sample="pituitary">
+                        <div class="sample-thumb-wrapper">
+                            <img src="{{ url_for('static', filename='samples/pituitary.jpg') }}" alt="Pituitary sample">
+                        </div>
+                        <span class="sample-label">Pituitary</span>
+                    </button>
+
+                    <button type="button" class="sample-card" data-sample="no_tumor">
+                        <div class="sample-thumb-wrapper">
+                            <img src="{{ url_for('static', filename='samples/no_tumor.jpg') }}" alt="No tumor sample">
+                        </div>
+                        <span class="sample-label">No tumor</span>
+                    </button>
+
+                    <button type="button" class="sample-card" data-sample="hard_case">
+                        <div class="sample-thumb-wrapper">
+                            <img src="{{ url_for('static', filename='samples/hard_case.jpg') }}" alt="Hard case sample">
+                        </div>
+                        <span class="sample-label warning">Hard case</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Privacy Badge -->
+            <div class="privacy-notice">
+                <i class="fa-solid fa-shield-halved"></i>
+                <span>Images are processed in memory and never stored.</span>
+            </div>
+        </section>
+
+        <!-- RIGHT COLUMN -->
+        <section class="card-panel right-panel">
+            <div class="prediction-header">
+                <div class="prediction-tag" id="predictionTag">PREDICTION</div>
+                <h2 class="prediction-headline" id="predictionHeadline">Meningioma</h2>
+                <div class="prediction-confidence" id="predictionConfidence">Calibrated confidence 99.8%.</div>
+            </div>
+
+            <!-- MRI Viewport with Heatmap Layer -->
+            <div class="mri-viewport-container">
+                <div class="mri-viewport">
+                    <img id="mriImage" src="{{ url_for('static', filename='samples/meningioma.jpg') }}" alt="MRI Scan">
+                    <img id="heatmapOverlay" class="heatmap-layer" src="" alt="Grad-CAM Heatmap">
+                    <div id="imageLoader" class="image-loader" style="display: none;">
+                        <div class="spinner"></div>
+                    </div>
+                </div>
+
+                <!-- Controls: Grad-CAM Toggle + Opacity Slider -->
+                <div class="cam-controls">
+                    <label class="toggle-control">
+                        <input type="checkbox" id="toggleHeatmap" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Grad-CAM heatmap</span>
+                    </label>
+
+                    <div class="slider-control">
+                        <span class="slider-label">opacity</span>
+                        <input type="range" id="opacitySlider" min="0" max="100" value="70">
+                    </div>
+                </div>
+
+                <div class="cam-caption">
+                    What the model saw (224 &times; 224). Warm colors mark the regions that drove the prediction.
+                </div>
+            </div>
+
+            <!-- Calibrated Probabilities -->
+            <div class="probabilities-section">
+                <div class="probabilities-heading">Calibrated probabilities</div>
+                
+                <div class="prob-row" id="rowGlioma">
+                    <span class="prob-name">Glioma</span>
+                    <div class="prob-bar-track">
+                        <div class="prob-bar-fill" id="barGlioma" style="width: 0.1%;"></div>
+                    </div>
+                    <span class="prob-value" id="valGlioma">0.1%</span>
+                </div>
+
+                <div class="prob-row" id="rowMeningioma">
+                    <span class="prob-name">Meningioma</span>
+                    <div class="prob-bar-track">
+                        <div class="prob-bar-fill active" id="barMeningioma" style="width: 99.8%;"></div>
+                    </div>
+                    <span class="prob-value" id="valMeningioma">99.8%</span>
+                </div>
+
+                <div class="prob-row" id="rowNoTumor">
+                    <span class="prob-name">No tumor</span>
+                    <div class="prob-bar-track">
+                        <div class="prob-bar-fill" id="barNoTumor" style="width: 0.0%;"></div>
+                    </div>
+                    <span class="prob-value" id="valNoTumor">0.0%</span>
+                </div>
+
+                <div class="prob-row" id="rowPituitary">
+                    <span class="prob-name">Pituitary</span>
+                    <div class="prob-bar-track">
+                        <div class="prob-bar-fill" id="barPituitary" style="width: 0.1%;"></div>
+                    </div>
+                    <span class="prob-value" id="valPituitary">0.1%</span>
+                </div>
+            </div>
+
+            <!-- Stats Grid -->
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <div class="stat-label">Confidence</div>
+                    <div class="stat-val" id="statConfidence">99.8%</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Distribution check</div>
+                    <div class="stat-val highlight" id="statDistCheck">passed</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Latency</div>
+                    <div class="stat-val" id="statLatency">142 ms</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Model</div>
+                    <div class="stat-val">v7</div>
+                </div>
+            </div>
+
+            <!-- Mahalanobis Distance Meter -->
+            <div class="distribution-meter-wrapper">
+                <div class="distribution-track">
+                    <div class="distance-fill" id="distanceFill" style="width: 25%;"></div>
+                    <div class="threshold-marker"></div>
+                    <div class="indicator-point" id="distanceMarker" style="left: 25%;"></div>
+                </div>
+                <div class="distribution-caption">
+                    Distance from the training MRIs (Mahalanobis score). Past the line, the model refuses to answer.
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Bottom Section: What happens to your image -->
+    <section class="pipeline-section">
+        <h3 class="pipeline-heading">What happens to your image</h3>
+        
+        <div class="pipeline-cards-grid">
+            <div class="pipeline-card">
+                <div class="step-badge">1</div>
+                <h4 class="step-title">Input checks</h4>
+                <p class="step-text">
+                    The file must decode as an image of sensible size, and be grayscale like an MRI. Color photos stop here.
+                </p>
+            </div>
+
+            <div class="pipeline-card">
+                <div class="step-badge">2</div>
+                <h4 class="step-title">Out-of-distribution test</h4>
+                <p class="step-text">
+                    The image's features are compared with the training MRIs. Too far from all of them, and the model refuses to guess.
+                </p>
+                <div class="step-footnote">OOD AUROC 0.998 on photos, X-rays, CT, spine MRI</div>
+            </div>
+
+            <div class="pipeline-card">
+                <div class="step-badge">3</div>
+                <h4 class="step-title">Calibrated classifier</h4>
+                <p class="step-text">
+                    EfficientNetB0 with temperature scaling, so "90%" means right about 9 times in 10. Low-confidence cases go to review.
+                </p>
+                <div class="step-footnote">Test macro F1 0.955</div>
+            </div>
+
+            <div class="pipeline-card">
+                <div class="step-badge">4</div>
+                <h4 class="step-title">Grad-CAM</h4>
+                <p class="step-text">
+                    A heatmap of the regions that drove the decision. A sanity check, not an explanation a clinician can rely on.
+                </p>
+            </div>
+        </div>
+
+        <div class="footer-disclaimers">
+            <p>On held-out test MRIs: 0.7% are sent to review as uncertain; the answered rest is 98.8% accurate, and 99.0% of tumors are detected.</p>
+            <p class="credits">Trained on the <a href="https://www.kaggle.com/navoneel/brain-mri-images-for-brain-tumor-detection" target="_blank">Brain Tumor MRI Dataset</a> (Masoud Nickparvar, CC BY 4.0), evaluated on a duplicate-aware split; image-level evaluation on one public dataset; performance on other scanners or hospitals is unknown.</p>
+        </div>
+    </section>
+
+</div>
+{% endblock %}
