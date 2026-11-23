@@ -94,12 +94,16 @@ $(document).ready(function () {
         }
         if (data.heatmap_base64) {
             $heatmapOverlay.attr('src', data.heatmap_base64);
-            $heatmapOverlay.show();
+            if ($toggleHeatmap.is(':checked')) {
+                $heatmapOverlay.show();
+            }
+        } else {
+            $heatmapOverlay.hide();
         }
 
         // Headline & Confidence
         $('#predictionHeadline').text(data.prediction);
-        $('#predictionConfidence').text('Calibrated confidence ' + data.confidence.toFixed(1) + '%.');
+        $('#predictionConfidence').text('Model confidence (softmax): ' + data.confidence.toFixed(1) + '%.');
 
         // Tag styling
         const $tag = $('#predictionTag');
@@ -118,13 +122,8 @@ $(document).ready(function () {
 
         // Stats
         $('#statConfidence').text(data.confidence.toFixed(1) + '%');
-        $('#statDistCheck').text(data.distribution_check || 'passed');
-        $('#statLatency').text((data.latency_ms || 142) + ' ms');
-
-        // Mahalanobis distance slider
-        const distPct = Math.min(Math.max((data.distance_score || 0.25) * 100, 5), 95);
-        $('#distanceFill').css('width', distPct + '%');
-        $('#distanceMarker').css('left', distPct + '%');
+        $('#statDistCheck').text(data.distribution_check || 'Not assessed');
+        $('#statLatency').text((data.latency_ms || 1) + ' ms');
     }
 
     function updateProbRow(key, val, isTop) {

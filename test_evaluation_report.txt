@@ -1,0 +1,26 @@
+BRAIN TUMOR MRI FOUR-CLASS CLASSIFIER - TEST EVALUATION REPORT
+======================================================================
+
+Model: MobileNetV2 (ImageNet Pretrained Transfer Learning)
+Total Test Samples: 1195
+Overall Test Accuracy: 94.39%
+
+Classification Report:
+              precision    recall  f1-score   support
+
+      Glioma     0.9580    0.9481    0.9530       289
+  Meningioma     0.9883    0.8411    0.9088       302
+    No tumor     0.9421    1.0000    0.9702       309
+   Pituitary     0.8981    0.9864    0.9402       295
+
+    accuracy                         0.9439      1195
+   macro avg     0.9466    0.9439    0.9431      1195
+weighted avg     0.9468    0.9439    0.9431      1195
+
+
+Confusion Matrix:
+True / Pred        Glioma  Meningio  No tumor  Pituitar
+Glioma                274         0         2        13
+Meningioma             12       254        16        20
+No tumor                0         0       309         0
+Pituitary               0         3         1       291

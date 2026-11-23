@@ -2,45 +2,59 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
 
 # Virtual environments
 venv/
+.venv/
 env/
 .env/
+ENV/
 
-# Model weights (too large for GitHub — download separately or use Git LFS)
+# Datasets (original and cleaned MRI datasets)
+Dataset/
+dataset/
+*.csv
+
+# Model weights: exclude heavy and duplicate models, keep only verified production model
 *.h5
 *.hdf5
 *.keras
 *.pb
 saved_model/
+!best_brain_tumor_mobilenetv2.h5
 
-# Uploaded user images (generated at runtime)
-uploads/*.jpg
-uploads/*.jpeg
-uploads/*.png
-uploads/*.bmp
+# Runtime uploads
+uploads/*
 !uploads/.gitkeep
 
-# IDE / Editor
+# Temporary backups and scratch test scripts
+app_before_real_inference.py
+test_phase1.py
+test_phase2.py
+test_server_live.py
+
+# Environment variables, credentials, and secrets
+.env
+.env.*
+*.pem
+*.key
+*.token
+credentials.json
+secrets.json
+
+# Logs
+*.log
+
+# IDE & OS files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# OS files
 .DS_Store
 Thumbs.db
 desktop.ini
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
-
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-
-# Logs
-*.log

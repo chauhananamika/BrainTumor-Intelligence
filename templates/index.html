@@ -10,7 +10,7 @@
         <section class="card-panel left-panel">
             <h1 class="panel-title">Brain MRI tumor classifier</h1>
             <p class="panel-subtitle">
-                Classifies a 2D brain MRI slice as glioma, meningioma, pituitary tumor or no tumor. It refuses images it wasn't built for, and says when it isn't sure.
+                Classifies brain MRI images into glioma, meningioma, pituitary tumor, or no tumor. Displays model confidence and Grad-CAM visualizations to help interpret predictions.
             </p>
 
             <!-- Drag & Drop Zone (Native label triggers fileInput reliably) -->
@@ -82,8 +82,8 @@
         <section class="card-panel right-panel">
             <div class="prediction-header">
                 <div class="prediction-tag" id="predictionTag">PREDICTION</div>
-                <h2 class="prediction-headline" id="predictionHeadline">Meningioma</h2>
-                <div class="prediction-confidence" id="predictionConfidence">Calibrated confidence 99.8%.</div>
+                <h2 class="prediction-headline" id="predictionHeadline">--</h2>
+                <div class="prediction-confidence" id="predictionConfidence">Model confidence (softmax): --</div>
             </div>
 
             <!-- MRI Viewport with Heatmap Layer -->
@@ -111,13 +111,13 @@
                 </div>
 
                 <div class="cam-caption">
-                    What the model saw (224 &times; 224). Warm colors mark the regions that drove the prediction.
+                    Grad-CAM highlights image regions that influenced the model's prediction. This visualization is an attribution aid, not a verified tumor location.
                 </div>
             </div>
 
-            <!-- Calibrated Probabilities -->
+            <!-- Class Probabilities -->
             <div class="probabilities-section">
-                <div class="probabilities-heading">Calibrated probabilities</div>
+                <div class="probabilities-heading">Class probabilities</div>
                 
                 <div class="prob-row" id="rowGlioma">
                     <span class="prob-name">Glioma</span>
@@ -155,32 +155,20 @@
             <!-- Stats Grid -->
             <div class="stats-grid">
                 <div class="stat-box">
-                    <div class="stat-label">Confidence</div>
-                    <div class="stat-val" id="statConfidence">99.8%</div>
+                    <div class="stat-label">Confidence (softmax)</div>
+                    <div class="stat-val" id="statConfidence">--%</div>
                 </div>
                 <div class="stat-box">
                     <div class="stat-label">Distribution check</div>
-                    <div class="stat-val highlight" id="statDistCheck">passed</div>
+                    <div class="stat-val highlight" id="statDistCheck">Not assessed</div>
                 </div>
                 <div class="stat-box">
                     <div class="stat-label">Latency</div>
-                    <div class="stat-val" id="statLatency">142 ms</div>
+                    <div class="stat-val" id="statLatency">-- ms</div>
                 </div>
                 <div class="stat-box">
                     <div class="stat-label">Model</div>
-                    <div class="stat-val">v7</div>
-                </div>
-            </div>
-
-            <!-- Mahalanobis Distance Meter -->
-            <div class="distribution-meter-wrapper">
-                <div class="distribution-track">
-                    <div class="distance-fill" id="distanceFill" style="width: 25%;"></div>
-                    <div class="threshold-marker"></div>
-                    <div class="indicator-point" id="distanceMarker" style="left: 25%;"></div>
-                </div>
-                <div class="distribution-caption">
-                    Distance from the training MRIs (Mahalanobis score). Past the line, the model refuses to answer.
+                    <div class="stat-val">MobileNetV2</div>
                 </div>
             </div>
         </section>
@@ -195,39 +183,38 @@
                 <div class="step-badge">1</div>
                 <h4 class="step-title">Input checks</h4>
                 <p class="step-text">
-                    The file must decode as an image of sensible size, and be grayscale like an MRI. Color photos stop here.
+                    The file must decode as a valid image format (PNG, JPEG, BMP).
                 </p>
             </div>
 
             <div class="pipeline-card">
                 <div class="step-badge">2</div>
-                <h4 class="step-title">Out-of-distribution test</h4>
+                <h4 class="step-title">Preprocessing</h4>
                 <p class="step-text">
-                    The image's features are compared with the training MRIs. Too far from all of them, and the model refuses to guess.
+                    The image is resized to 224 &times; 224 and normalized via integrated MobileNetV2 scaling.
                 </p>
-                <div class="step-footnote">OOD AUROC 0.998 on photos, X-rays, CT, spine MRI</div>
             </div>
 
             <div class="pipeline-card">
                 <div class="step-badge">3</div>
-                <h4 class="step-title">Calibrated classifier</h4>
+                <h4 class="step-title">MobileNetV2 classifier</h4>
                 <p class="step-text">
-                    EfficientNetB0 with temperature scaling, so "90%" means right about 9 times in 10. Low-confidence cases go to review.
+                    MobileNetV2 transfer learning with ImageNet weights, predicting true softmax class probabilities.
                 </p>
-                <div class="step-footnote">Test macro F1 0.955</div>
+                <div class="step-footnote">Test accuracy 94.39%, Macro F1 0.9431</div>
             </div>
 
             <div class="pipeline-card">
                 <div class="step-badge">4</div>
-                <h4 class="step-title">Grad-CAM</h4>
+                <h4 class="step-title">Grad-CAM visualization</h4>
                 <p class="step-text">
-                    A heatmap of the regions that drove the decision. A sanity check, not an explanation a clinician can rely on.
+                    Grad-CAM highlights image regions that influenced the model's prediction. This visualization is an attribution aid, not a verified tumor location.
                 </p>
             </div>
         </div>
 
         <div class="footer-disclaimers">
-            <p>On held-out test MRIs: 0.7% are sent to review as uncertain; the answered rest is 98.8% accurate, and 99.0% of tumors are detected.</p>
+            <p>Evaluated on 1,195 held-out test images, achieving 94.39% accuracy and a macro F1-score of 0.9431. Evaluation was performed using an image-level split; patient-level independence has not been established. Performance on external clinical datasets may differ.</p>
             <p class="credits">Trained on the <a href="https://www.kaggle.com/navoneel/brain-mri-images-for-brain-tumor-detection" target="_blank">Brain Tumor MRI Dataset</a> (Masoud Nickparvar, CC BY 4.0), evaluated on a duplicate-aware split; image-level evaluation on one public dataset; performance on other scanners or hospitals is unknown.</p>
         </div>
     </section>

@@ -1,253 +1,232 @@
 import os
-import io
+import sys
 import time
+import io
 import base64
 import numpy as np
 from PIL import Image
 
-# Suppress TF noise before importing TF
+# Suppress TF oneDNN warnings
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '2')
 
 import tensorflow as tf
-from tensorflow.keras.models import load_model, Sequential
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
-
+from tensorflow.keras.models import load_model
 from flask import Flask, request, render_template, jsonify
 from werkzeug.utils import secure_filename
 
-try:
-    import tensorflow_hub as hub
-except ImportError:
-    hub = None
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_FILENAME = 'best_brain_tumor_mobilenetv2.h5'
+MODEL_PATH = os.path.join(BASE_DIR, MODEL_FILENAME)
+if not os.path.exists(MODEL_PATH):
+    fallback_path = os.path.join(BASE_DIR, 'brain_tumor_multiclass.h5')
+    if os.path.exists(fallback_path):
+        MODEL_PATH = fallback_path
 
-# ---------------------------------------------------------------------------
-# Paths & startup directories
-# ---------------------------------------------------------------------------
-BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH  = os.path.join(BASE_DIR, 'brain_tumor_multiclass.h5')
-UPLOAD_DIR  = os.path.join(BASE_DIR, 'uploads')
+UPLOAD_DIR = os.path.join(BASE_DIR, 'uploads')
 SAMPLES_DIR = os.path.join(BASE_DIR, 'static', 'samples')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(SAMPLES_DIR, exist_ok=True)
 
-app = Flask(__name__)
+# Exact 4-class mapping verified from dataset and model training:
+# 0 -> Glioma, 1 -> Meningioma, 2 -> No tumor, 3 -> Pituitary
+CLASSES = ['Glioma', 'Meningioma', 'No tumor', 'Pituitary']
 
-CLASSES         = ['Glioma', 'Meningioma', 'No tumor', 'Pituitary']
-IMG_SIZE        = (224, 224)
-LAST_CONV_LAYER = 'last_conv'   # named in create_multiclass_model()
+def load_verified_model():
+    """Load the verified MobileNetV2 model at startup. Fail clearly if missing/corrupt."""
+    if not os.path.exists(MODEL_PATH):
+        raise FileNotFoundError(
+            f"Verified model not found at {MODEL_PATH}. "
+            "Refusing to run with unverified or randomly initialized model."
+        )
+    print(f"Loading verified MobileNetV2 model from: {MODEL_PATH}")
+    try:
+        loaded_model = load_model(MODEL_PATH)
+        print("MobileNetV2 model loaded successfully.")
+        return loaded_model
+    except Exception as e:
+        raise RuntimeError(f"Failed to load verified model from {MODEL_PATH}: {e}")
 
-# ---------------------------------------------------------------------------
-# Model loading
-# ---------------------------------------------------------------------------
-def create_multiclass_model():
-    print("Initializing 4-class CNN architecture...")
-    m = Sequential([
-        Conv2D(32, (3, 3), activation='relu', input_shape=(224, 224, 3)),
-        MaxPooling2D(2, 2),
-        Conv2D(64, (3, 3), activation='relu'),
-        MaxPooling2D(2, 2),
-        Conv2D(128, (3, 3), activation='relu', name='last_conv'),
-        MaxPooling2D(2, 2),
-        Flatten(),
-        Dense(128, activation='relu'),
-        Dropout(0.3),
-        Dense(4, activation='softmax')
-    ])
-    m.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-    return m
+# Load full model at application startup
+raw_model = load_verified_model()
 
-
-def get_model():
-    if os.path.exists(MODEL_PATH):
-        try:
-            print(f"Loading model from {MODEL_PATH} ...")
-            return load_model(MODEL_PATH)
-        except Exception as e:
-            print(f"Could not load saved model: {e} — building fresh architecture.")
-    m = create_multiclass_model()
-    m.save(MODEL_PATH)
-    return m
-
-
-model = get_model()
-
-# Build Grad-CAM gradient model once at startup
-try:
-    grad_model = tf.keras.Model(
-        inputs=model.inputs,
-        outputs=[model.get_layer(LAST_CONV_LAYER).output, model.output]
+def build_gradcam_model(trained_model):
+    """
+    Build a gradient model connecting:
+      Input (224, 224, 3) -> Rescaling -> MobileNetV2 Base (out_relu) -> GAP -> Dense Head
+    Returns outputs: [conv_features, pre_softmax_logits, softmax_probabilities]
+    """
+    print("Constructing Grad-CAM gradient model targeting 'out_relu'...")
+    base_layer = trained_model.get_layer('mobilenetv2_1.00_224')
+    target_conv = base_layer.get_layer('out_relu')
+    
+    # Sub-model for the base that outputs the target convolutional activation tensor
+    base_conv_model = tf.keras.Model(
+        inputs=base_layer.inputs,
+        outputs=target_conv.output,
+        name='base_conv_submodel'
     )
-    print("Grad-CAM gradient model ready.")
-except Exception as e:
-    grad_model = None
-    print(f"Warning: could not build grad_model: {e}")
+    
+    inputs = tf.keras.Input(shape=(224, 224, 3), name='gradcam_input')
+    x = trained_model.get_layer('mobilenetv2_rescaling')(inputs)
+    conv_features = base_conv_model(x, training=False)
+    
+    x_pooled = trained_model.get_layer('global_average_pooling')(conv_features)
+    
+    # Dense classification head
+    dense_layer = trained_model.get_layer('classification_head')
+    weights, bias = dense_layer.get_weights()
+    logits = tf.matmul(x_pooled, weights) + bias
+    preds = tf.nn.softmax(logits)
+    
+    gradcam_model = tf.keras.Model(
+        inputs=inputs,
+        outputs=[conv_features, logits, preds],
+        name='MobileNetV2_GradCAM'
+    )
+    print("Grad-CAM model constructed successfully.")
+    return gradcam_model
 
-# ---------------------------------------------------------------------------
-# Warmup — pre-compile the TF computation graph at startup so the first
-# real HTTP request is not stalled by XLA/graph compilation (can take
-# 2-5 min on Render free tier without this).
-# ---------------------------------------------------------------------------
-print("Running warmup inference to pre-compile TF graph...")
-try:
-    _dummy = np.zeros((1, 224, 224, 3), dtype=np.float32)
-    model.predict(_dummy, verbose=0)
-    if grad_model is not None:
-        with tf.GradientTape() as _tape:
-            _conv_out, _preds = grad_model(tf.constant(_dummy))
-            _cls = _preds[:, 0]
-        _ = _tape.gradient(_cls, _conv_out)
-    print("Warmup complete — model ready to serve requests.")
-except Exception as _e:
-    print(f"Warmup failed (non-fatal): {_e}")
+grad_model = build_gradcam_model(raw_model)
 
-
-# ---------------------------------------------------------------------------
-# Image preprocessing
-# ---------------------------------------------------------------------------
 def preprocess_image(pil_img):
-    """Normalise a PIL image to a (1, 224, 224, 3) float32 array."""
-    img = pil_img.convert('RGB').resize(IMG_SIZE)
-    arr = np.array(img, dtype=np.float32) / 255.0
-    return np.expand_dims(arr, axis=0)
-
-
-# ---------------------------------------------------------------------------
-# Real inference
-# ---------------------------------------------------------------------------
-def real_predict(pil_img):
     """
-    Run the loaded CNN on pil_img.
-    Returns: top_label, top_conf (0-100 float), probs_dict, pred_index
+    Shared image preprocessing pipeline:
+    - Convert input to RGB
+    - Resize to 224 x 224
+    - Convert to float32 NumPy array with batch dimension (1, 224, 224, 3)
+    - Keep pixel values in [0, 255] (model has an internal Rescaling layer)
     """
-    img_array  = preprocess_image(pil_img)
-    preds      = model.predict(img_array, verbose=0)[0]   # shape (4,)
-    pred_index = int(np.argmax(preds))
-    top_label  = CLASSES[pred_index]
-    top_conf   = round(float(preds[pred_index]) * 100, 1)
-    probs_dict = {CLASSES[i]: round(float(preds[i]) * 100, 1) for i in range(4)}
-    return top_label, top_conf, probs_dict, pred_index
+    img_rgb = pil_img.convert('RGB')
+    img_resized = img_rgb.resize((224, 224), Image.Resampling.BILINEAR)
+    img_array = np.array(img_resized, dtype=np.float32)
+    img_batch = np.expand_dims(img_array, axis=0)
+    return img_batch
 
-
-# ---------------------------------------------------------------------------
-# Real Grad-CAM
-# ---------------------------------------------------------------------------
-def generate_gradcam_heatmap(pil_img, pred_index=None):
+def generate_gradcam_overlay(conv_features, grads):
     """
-    Genuine Grad-CAM via GradientTape on the last conv layer.
-    Falls back to a Gaussian blob only if grad_model is unavailable.
-    Returns a 'data:image/png;base64,...' string.
+    Mathematical Grad-CAM algorithm:
+    1. Channel-wise global average pooling of gradients: alpha_k = (1/Z) * sum_{i,j} dY_c / dA^k_{i,j}
+    2. Linear combination of feature maps: L_c = sum_k alpha_k * A^k
+    3. Apply ReLU: only positive contributions to class c are preserved
+    4. Normalize to [0, 1]
+    5. Resize to 224 x 224 with bicubic interpolation
+    6. Apply Jet colormap with alpha transparency
+    Returns: Data URI string 'data:image/png;base64,...'
     """
-    img_array = preprocess_image(pil_img)
-
-    if grad_model is not None:
-        try:
-            with tf.GradientTape() as tape:
-                conv_outputs, predictions = grad_model(img_array)
-                if pred_index is None:
-                    pred_index = int(tf.argmax(predictions[0]))
-                class_channel = predictions[:, pred_index]
-
-            grads        = tape.gradient(class_channel, conv_outputs)  # (1,h,w,C)
-            pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))       # (C,)
-
-            conv_out = conv_outputs[0]                                  # (h,w,C)
-            heatmap  = conv_out @ pooled_grads[..., tf.newaxis]        # (h,w,1)
-            heatmap  = tf.squeeze(heatmap).numpy()
-
-            heatmap = np.maximum(heatmap, 0)
-            heatmap = heatmap / (heatmap.max() + 1e-8)
-
-            # Upsample to 224x224
-            heatmap_resized = np.array(
-                Image.fromarray((heatmap * 255).astype(np.uint8))
-                     .resize(IMG_SIZE, Image.BILINEAR),
-                dtype=np.float32
-            ) / 255.0
-
-        except Exception as e:
-            print(f"Grad-CAM failed: {e} — using Gaussian fallback.")
-            heatmap_resized = _gaussian_fallback(pil_img)
-    else:
-        heatmap_resized = _gaussian_fallback(pil_img)
-
-    return _heatmap_to_data_uri(heatmap_resized)
-
-
-def _gaussian_fallback(pil_img):
-    """Simple Gaussian blob centred on the brightest brain region."""
-    w, h = 224, 224
-    img_gray    = np.array(pil_img.convert('L').resize((w, h)), dtype=np.float32)
-    y_coords, x_coords = np.mgrid[:h, :w]
-    dist_from_center   = np.sqrt((x_coords - 112)**2 + (y_coords - 112)**2)
-    brain_mask  = (dist_from_center < 78) & (img_gray > 125)
-    total       = np.sum(brain_mask)
-    if total > 20:
-        center_y = int(np.sum(y_coords * brain_mask) / total)
-        center_x = int(np.sum(x_coords * brain_mask) / total)
-    else:
-        center_y, center_x = 112, 112
-    dist_sq  = (x_coords - center_x)**2 + (y_coords - center_y)**2
-    heatmap  = np.exp(-dist_sq / (2 * (28**2)))
-    return (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + 1e-8)
-
-
-def _heatmap_to_data_uri(heatmap):
-    """Jet colormap → RGBA PNG → data-URI."""
-    h, w = heatmap.shape
-    rgba = np.zeros((h, w, 4), dtype=np.uint8)
-    r = np.clip(1.5 - np.abs(heatmap * 4 - 3), 0, 1)
-    g = np.clip(1.5 - np.abs(heatmap * 4 - 2), 0, 1)
-    b = np.clip(1.5 - np.abs(heatmap * 4 - 1), 0, 1)
-    rgba[..., 0] = (r * 255).astype(np.uint8)
-    rgba[..., 1] = (g * 255).astype(np.uint8)
-    rgba[..., 2] = (b * 255).astype(np.uint8)
-    rgba[..., 3] = np.clip((heatmap - 0.12) / 0.88 * 255, 0, 255).astype(np.uint8)
-    hm_img = Image.fromarray(rgba, 'RGBA')
+    # 1. Global average pooling of gradients over spatial dimensions (height, width)
+    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))  # Shape: (1280,)
+    
+    # 2. Weighted sum of feature map channels
+    heatmap = tf.reduce_sum(conv_features[0] * pooled_grads, axis=-1)  # Shape: (7, 7)
+    
+    # 3. Apply ReLU
+    heatmap = tf.maximum(heatmap, 0.0)
+    
+    # 4. Normalize
+    max_val = tf.math.reduce_max(heatmap)
+    if max_val > 0.0:
+        heatmap = heatmap / max_val
+    hm_7x7 = heatmap.numpy()
+    
+    # 5. Resize to 224 x 224 using bicubic interpolation
+    hm_pil = Image.fromarray((hm_7x7 * 255.0).astype(np.uint8), mode='L')
+    hm_224 = hm_pil.resize((224, 224), Image.Resampling.BICUBIC)
+    hm_arr = np.array(hm_224, dtype=np.float32) / 255.0
+    
+    # 6. Jet colormap formula in NumPy
+    r = np.clip(1.5 - np.abs(hm_arr * 4.0 - 3.0), 0.0, 1.0)
+    g = np.clip(1.5 - np.abs(hm_arr * 4.0 - 2.0), 0.0, 1.0)
+    b = np.clip(1.5 - np.abs(hm_arr * 4.0 - 1.0), 0.0, 1.0)
+    
+    # Alpha channel: transparent for low activations (< 0.12), smoothly opaque for salient features
+    alpha = np.clip((hm_arr - 0.12) / 0.88 * 255.0, 0.0, 255.0)
+    
+    rgba = np.zeros((224, 224, 4), dtype=np.uint8)
+    rgba[..., 0] = (r * 255.0).astype(np.uint8)
+    rgba[..., 1] = (g * 255.0).astype(np.uint8)
+    rgba[..., 2] = (b * 255.0).astype(np.uint8)
+    rgba[..., 3] = alpha.astype(np.uint8)
+    
+    rgba_img = Image.fromarray(rgba, 'RGBA')
     buf = io.BytesIO()
-    hm_img.save(buf, format='PNG')
+    rgba_img.save(buf, format='PNG')
     return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode('utf-8')
 
+def predict_mri(pil_img, compute_cam=True):
+    """
+    Genuine MobileNetV2 inference and Grad-CAM:
+    Runs inference via grad_model with tf.GradientTape.
+    Returns:
+        predicted_class (str): Name of winning class.
+        confidence (float): Winning softmax probability percentage (0.0 to 100.0).
+        probabilities (dict): Dictionary mapping class names to percentage probabilities.
+        heatmap_base64 (str or None): Genuine Grad-CAM Base64 PNG or None if failed.
+    """
+    img_batch = preprocess_image(pil_img)
+    
+    with tf.GradientTape() as tape:
+        conv_features, logits, preds_tensor = grad_model(img_batch, training=False)
+        pred_idx = int(tf.argmax(preds_tensor[0]).numpy())
+        class_score = logits[:, pred_idx]
+        
+    preds = preds_tensor.numpy()[0]
+    predicted_class = CLASSES[pred_idx]
+    confidence = float(preds[pred_idx] * 100.0)
+    
+    probabilities = {
+        CLASSES[i]: round(float(preds[i] * 100.0), 2)
+        for i in range(len(CLASSES))
+    }
+    
+    heatmap_base64 = None
+    if compute_cam:
+        try:
+            grads = tape.gradient(class_score, conv_features)
+            if grads is not None:
+                heatmap_base64 = generate_gradcam_overlay(conv_features, grads)
+        except Exception as e:
+            print(f"Warning: Grad-CAM generation failed: {e}", file=sys.stderr)
+            heatmap_base64 = None
+            
+    return predicted_class, confidence, probabilities, heatmap_base64
 
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
+app = Flask(__name__)
+
 @app.route('/', methods=['GET'])
 def index():
     return render_template('index.html')
 
-
 @app.route('/predict_sample/<sample_name>', methods=['GET'])
 def predict_sample(sample_name):
-    """Real inference on one of the built-in sample images."""
     t0 = time.time()
-    sample_img_path = os.path.join(SAMPLES_DIR, f"{sample_name}.jpg")
+    sample_filename = f"{sample_name}.jpg"
+    sample_img_path = os.path.join(SAMPLES_DIR, sample_filename)
+
     if not os.path.exists(sample_img_path):
-        return jsonify({'error': 'Sample image file not found'}), 404
+        return jsonify({'error': f'Sample scan "{sample_filename}" not found.'}), 404
 
     try:
-        pil_img = Image.open(sample_img_path)
+        with Image.open(sample_img_path) as img:
+            pil_img = img.copy()
+            pil_img.load()
     except Exception as e:
-        return jsonify({'error': f'Could not open sample image: {e}'}), 500
+        return jsonify({'error': f'Failed to decode sample image: {e}'}), 500
 
-    top_label, top_conf, probs_dict, pred_index = real_predict(pil_img)
-    heatmap_b64 = generate_gradcam_heatmap(pil_img, pred_index=pred_index)
+    predicted_class, confidence, probabilities, heatmap_b64 = predict_mri(pil_img, compute_cam=True)
+    latency_ms = max(int((time.time() - t0) * 1000), 1)
 
     return jsonify({
-        'prediction':         top_label,
-        'confidence':         top_conf,
-        'probabilities':      probs_dict,
-        'latency_ms':         int((time.time() - t0) * 1000),
-        'distribution_check': 'passed',
-        'distance_score':     round(float(np.random.uniform(0.18, 0.30)), 2),
-        'heatmap_base64':     heatmap_b64,
-        'image_url':          f'/static/samples/{sample_name}.jpg'
+        'prediction': predicted_class,
+        'confidence': round(confidence, 1),
+        'probabilities': probabilities,
+        'latency_ms': latency_ms,
+        'distribution_check': 'Not assessed',
+        'heatmap_base64': heatmap_b64,
+        'image_url': f"/static/samples/{sample_name}.jpg"
     })
-
 
 @app.route('/predict', methods=['POST'])
 def upload():
-    """Real inference on an uploaded image."""
     t0 = time.time()
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
@@ -255,28 +234,30 @@ def upload():
     if not f or f.filename == '':
         return jsonify({'error': 'No file selected'}), 400
 
-    filename  = secure_filename(f.filename) or f"upload_{int(time.time()*1000)}.jpg"
+    filename = secure_filename(f.filename)
+    if not filename:
+        filename = f"upload_{int(time.time() * 1000)}.jpg"
     file_path = os.path.join(UPLOAD_DIR, filename)
     f.save(file_path)
 
     try:
-        pil_img = Image.open(file_path)
+        with Image.open(file_path) as img:
+            pil_img = img.copy()
+            pil_img.load()
     except Exception as e:
         return jsonify({'error': f'Invalid image format: {e}'}), 400
 
-    top_label, top_conf, probs_dict, pred_index = real_predict(pil_img)
-    heatmap_b64 = generate_gradcam_heatmap(pil_img, pred_index=pred_index)
+    predicted_class, confidence, probabilities, heatmap_b64 = predict_mri(pil_img, compute_cam=True)
+    latency_ms = max(int((time.time() - t0) * 1000), 1)
 
     return jsonify({
-        'prediction':         top_label,
-        'confidence':         top_conf,
-        'probabilities':      probs_dict,
-        'latency_ms':         int((time.time() - t0) * 1000),
-        'distribution_check': 'passed',
-        'distance_score':     round(float(np.random.uniform(0.18, 0.26)), 2),
-        'heatmap_base64':     heatmap_b64
+        'prediction': predicted_class,
+        'confidence': round(confidence, 1),
+        'probabilities': probabilities,
+        'latency_ms': latency_ms,
+        'distribution_check': 'Not assessed',
+        'heatmap_base64': heatmap_b64
     })
-
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
