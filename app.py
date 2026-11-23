@@ -83,6 +83,24 @@ except Exception as e:
     grad_model = None
     print(f"Warning: could not build grad_model: {e}")
 
+# ---------------------------------------------------------------------------
+# Warmup — pre-compile the TF computation graph at startup so the first
+# real HTTP request is not stalled by XLA/graph compilation (can take
+# 2-5 min on Render free tier without this).
+# ---------------------------------------------------------------------------
+print("Running warmup inference to pre-compile TF graph...")
+try:
+    _dummy = np.zeros((1, 224, 224, 3), dtype=np.float32)
+    model.predict(_dummy, verbose=0)
+    if grad_model is not None:
+        with tf.GradientTape() as _tape:
+            _conv_out, _preds = grad_model(tf.constant(_dummy))
+            _cls = _preds[:, 0]
+        _ = _tape.gradient(_cls, _conv_out)
+    print("Warmup complete — model ready to serve requests.")
+except Exception as _e:
+    print(f"Warmup failed (non-fatal): {_e}")
+
 
 # ---------------------------------------------------------------------------
 # Image preprocessing
