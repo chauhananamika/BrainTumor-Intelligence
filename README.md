@@ -2,8 +2,9 @@
 
 A deep learning web application that classifies 2D brain MRI slices into **Glioma**, **Meningioma**, **Pituitary tumor**, or **No tumor** using a Convolutional Neural Network (CNN), with Grad-CAM heatmap visualization.
 
-![NeuroScan Demo](<img width="404" height="388" alt="Screenshot 2026-11-23 142711" src="https://github.com/user-attachments/assets/25e9b470-f046-46cd-a629-ea67423c419c" />
-)
+<p align="center">
+  <img width="404" alt="NeuroScan Demo" src="https://github.com/user-attachments/assets/25e9b470-f046-46cd-a629-ea67423c419c" />
+</p>
 
 ---
 
@@ -53,8 +54,8 @@ Brain-Tumor-Detection-CNN-Architecture/
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/Brain-Tumor-Detection-CNN-Architecture.git
-cd Brain-Tumor-Detection-CNN-Architecture
+git clone https://github.com/chauhananamika/BrainTumor-Intelligence.git
+cd BrainTumor-Intelligence
 ```
 
 ### 2. Create Virtual Environment
