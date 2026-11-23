@@ -80,7 +80,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Open **[http://127.0.0.1:5000](http://127.0.0.1:5000)** in your browser.
+Open **[https://braintumor-intelligence.onrender.com/]** in your browser.
 
 > **Note:** On first run, the app auto-generates a baseline `brain_tumor.h5` model. For a trained model with real accuracy, run the `Brain_tumor_predict.ipynb` notebook with the Kaggle dataset first.
 
